@@ -11,7 +11,7 @@
 ## 技术栈
 
 - Python 3.10 / 3.11
-- Flask 3.0.3
+- Flask 3.1.3
 - flask-jwt-extended 4.6.0（JWT）
 - bcrypt 4.1.3（密码哈希，cost=12）
 - SQLite（Python 标准库 `sqlite3`）
@@ -104,12 +104,19 @@ pytest -v          # 8 个用例全通过
 
 ## CI/CD
 
-`.github/workflows/ci.yml` 在 push/PR 时自动执行两个 Job：
+仓库根目录 `.github/workflows/ci.yml`（`Security CI`），在 push / PR 到 `main` 时自动执行两个 Job：
 
-1. **test**：Python 3.10 / 3.11 矩阵，装依赖 → `init_db.py` → `pytest -v`。
-2. **security**：`bandit`（SAST 静态扫描）+ `pip-audit`（依赖漏洞审计）。
+1. **test**：Python 3.11，装依赖 → `pytest -v`（8 个用例）。
+2. **security**：
+   - SAST：`bandit -r . -x ./.venv --severity-level medium`（中危及以上导致 CI 失败）
+   - SCA：`pip-audit -r requirements.txt`（对照 PyPI/OSV 检查依赖 CVE）
 
-推送到 GitHub 后，在仓库 **Actions** 页可看到流水线绿灯（`📸` 截图）。
+> 实测：`pip-audit` 曾检出 `Flask 3.0.3` 存在已知漏洞（PYSEC-2026-2151，会话缓存
+> 敏感信息泄露，修复于 3.1.3），已升级为 `Flask==3.1.3` 后通过；`bandit` 在
+> `--severity-level medium` 下 0 中危/高危。
+
+**📸 截图节点 ②**：进入仓库 **Actions** 页，截取最近一次成功运行的流水线，确认
+**Bandit** 和 **pip-audit** 两个 step 均为绿色通过。
 
 ## 📸 截图清单（写入实验报告）
 
@@ -117,4 +124,4 @@ pytest -v          # 8 个用例全通过
    可见 bcrypt 哈希串（`$2b$12$...`）。
 2. 截图节点 ①：无 token 401 → 登录拿 token → 带 token 200 → 发 XSS 帖 → 读回已转义。
 3. `pytest -v` 全绿截图。
-4. GitHub Actions 流水线（test + security）通过截图。
+4. 截图节点 ②：GitHub Actions 最近一次成功运行，Bandit 与 pip-audit 两个 step 均绿色通过。

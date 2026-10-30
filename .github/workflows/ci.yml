@@ -1,0 +1,49 @@
+name: Security CI
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  # 单元/集成测试：证明功能正确，且 SQLi/XSS 防护有效
+  test:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: secure-api
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt pytest
+      - name: Run tests
+        run: pytest -v
+
+  # 安全扫描：SAST（bandit）+ SCA（pip-audit）
+  security:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: secure-api
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install bandit pip-audit
+      - name: SAST — Bandit
+        run: bandit -r . -x ./.venv --severity-level medium
+      - name: SCA — pip-audit
+        run: pip-audit -r requirements.txt
