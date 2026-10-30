@@ -1,0 +1,38 @@
+name: CI
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+
+jobs:
+  # 1) 单元/集成测试：证明功能正确、且注入/XSS 防护有效
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python-version: ["3.10", "3.11"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+      - run: pip install -r requirements.txt pytest
+      - run: python init_db.py
+      - run: pytest -v
+
+  # 2) 安全扫描：SAST（bandit）+ 依赖漏洞扫描（pip-audit）
+  security:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+      - run: pip install -r requirements.txt bandit pip-audit
+      - name: SAST (bandit)
+        run: bandit -r app.py init_db.py -f txt
+      - name: Dependency audit (pip-audit)
+        run: pip-audit
