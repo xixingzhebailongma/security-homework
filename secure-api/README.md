@@ -1,28 +1,28 @@
 # secure-api —— 安全 REST API（作业第一部分）
 
-基于 Flask 的安全 REST API，落实并演示三类安全防护：
+基于 Flask 的安全 REST API，包含三个端点，落实三类安全防护：
 
 | 防护点 | 技术手段 |
 | --- | --- |
-| 认证安全 | bcrypt 密码哈希 + JWT 无状态鉴权 |
-| SQL 注入防护 | 全程参数化查询（`?` 占位符），无任何字符串拼接 |
-| 存储型 XSS 防护 | 内容原样入库，渲染时由 Jinja2 自动转义 |
+| 认证（1 分） | bcrypt 密码哈希（cost=12）+ JWT 无状态鉴权 |
+| SQL 注入防护（0.5 分） | 全程参数化查询（`?` 占位符），无字符串拼接 |
+| 存储型 XSS 防护（0.5 分） | 返回数据前用 `markupsafe.escape()` 做 HTML 实体编码 |
 
 ## 技术栈
 
-- Python 3.10 / 3.11（本机以 3.10.12 实测通过，Flask 3.x 要求 ≥3.8）
+- Python 3.10 / 3.11
 - Flask 3.0.3
 - flask-jwt-extended 4.6.0（JWT）
 - bcrypt 4.1.3（密码哈希，cost=12）
-- SQLite（Python 标准库 `sqlite3`，不引入 ORM）
+- SQLite（Python 标准库 `sqlite3`）
 
 ## 目录结构
 
 ```
 secure-api/
-├── app.py                 # 主程序：注册/登录/鉴权/文章接口
-├── init_db.py             # 初始化数据库 + 内置测试用户 alice
-├── test_app.py            # pytest 自动化测试（9 个用例）
+├── app.py                 # 主程序：/auth/login、/api/data、/api/posts
+├── init_db.py             # 初始化数据库 + 内置测试用户 alice / Alice#2026!
+├── test_app.py            # pytest 自动化测试（8 个用例）
 ├── requirements.txt
 ├── .gitignore
 └── .github/workflows/
@@ -37,83 +37,70 @@ python3 -m venv .venv
 source .venv/bin/activate          # Windows: .venv\Scripts\activate
 pip install -r requirements.txt pytest
 python init_db.py                  # 建库并写入测试用户 alice / Alice#2026!
-python app.py                      # 启动于 http://127.0.0.1:5000
+python app.py                      # 启动于 http://localhost:5000
 ```
 
 > 注意：若 `python3 -m venv` 报 `ensurepip is not available`，先安装
 > `sudo apt install python3.10-venv`（或对应 Python 版本的 `python3.x-venv`）。
 
-## 接口清单与安全演示
+## 三个端点
 
-以下命令均在服务启动后用 `curl` 验证（`📸` 为建议截图点）。
+| 方法 | 路径 | 说明 |
+| --- | --- | --- |
+| POST | `/auth/login` | 登录：bcrypt 校验密码，成功签发 JWT |
+| GET | `/api/data` | JWT 保护：返回当前用户文章（title/content 已转义） |
+| POST | `/api/posts` | JWT 保护：发布文章（参数化查询防 SQLi） |
 
-### 1) 注册 —— `POST /register`
+## 本地测试（报告用，按顺序执行并保留输出）
 
 ```bash
-curl -X POST http://127.0.0.1:5000/register \
+# 1. 无 token 访问 /api/data → 应返回 401
+curl -s -o /dev/null -w "%{http_code}\n" http://localhost:5000/api/data
+
+# 2. 登录获取 token
+TOKEN=$(curl -s -X POST http://localhost:5000/auth/login \
   -H "Content-Type: application/json" \
-  -d '{"username":"bob","password":"Bob#1234!"}'
-# -> 201 {"msg":"注册成功"}
-```
+  -d '{"username":"alice","password":"Alice#2026!"}' \
+  | python -c "import sys,json; print(json.load(sys.stdin)['access_token'])")
 
-密码以 **bcrypt cost=12** 哈希后落库，数据库里看不到明文（`📸` 截图
-`sqlite3 app.db 'SELECT username, password_hash FROM users;'`，可见 `$2b$12$...` 哈希串）。
+# 3. 带 token 访问 /api/data → 应返回 200 + 空列表
+curl -s http://localhost:5000/api/data -H "Authorization: Bearer $TOKEN"
 
-### 2) 登录 —— `POST /login`（签发 JWT）
-
-```bash
-curl -X POST http://127.0.0.1:5000/login \
+# 4. 创建一条带 XSS payload 的 post
+curl -s -X POST http://localhost:5000/api/posts \
+  -H "Authorization: Bearer $TOKEN" \
   -H "Content-Type: application/json" \
-  -d '{"username":"alice","password":"Alice#2026!"}'
-# -> 200 {"access_token":"eyJhbGciOiJIUzI1NiIs...","username":"alice"}
+  -d '{"title":"<script>alert(1)</script>","content":"xss test"}'
+
+# 5. 再次读取 /api/data → title 应为转义后的 &lt;script&gt;
+curl -s http://localhost:5000/api/data -H "Authorization: Bearer $TOKEN"
 ```
 
-### 3) 受保护接口 —— `GET /me`
-
-不带 token 返回 `401`，带 token 返回当前用户（`📸` 对比两张截图）：
-
-```bash
-curl -i http://127.0.0.1:5000/me                                  # 401 未授权
-curl -H "Authorization: Bearer <上一步的token>" http://127.0.0.1:5000/me   # 200 {"id":1,"username":"alice"}
-```
-
-### 4) 存储型 XSS —— `POST /posts` + `GET /posts`
-
-```bash
-# 发布一段“恶意”内容（token 同上）
-curl -X POST http://127.0.0.1:5000/posts \
-  -H "Content-Type: application/json" \
-  -H "Authorization: Bearer <token>" \
-  -d '{"title":"恶意文章","content":"<script>alert(1)</script>"}'
-# -> 201 {"msg":"发布成功"}
-
-# 浏览器打开列表页，脚本被转义为纯文本，不会弹窗
-curl http://127.0.0.1:5000/posts
-# -> <p>&lt;script&gt;alert(1)&lt;/script&gt;</p>
-```
-
-（`📸` 截图列表页 HTML 源码，标注 `<script>` 已被转义为 `&lt;script&gt;`。）
+**📸 截图节点 ①**：步骤 1 返回 401、步骤 3 返回 200、步骤 5 返回内容包含
+`&lt;script&gt;` 而不是原始 `<script>`。
 
 ## 安全设计说明
 
-- **bcrypt 哈希**：`bcrypt.hashpw(..., gensalt(rounds=12))`，自带盐值，`cost=12` 提高暴力破解成本；校验用 `checkpw`，失败与“用户不存在”返回同一句话，避免用户名枚举。
-- **参数化查询**：所有 SQL 一律 `?` 占位符，例如登录处
+- **认证**：`bcrypt.hashpw(..., gensalt(rounds=12))` 哈希存储密码；登录用 `checkpw`
+  校验，成功签发 `create_access_token`，`@jwt_required()` 保护 `/api/data`、`/api/posts`；
+  token 有效期 `JWT_ACCESS_TOKEN_EXPIRES = 900`（15 分钟）。
+- **SQLi 防护**：所有 SQL 一律 `?` 占位符，例如登录处
   `SELECT ... WHERE username = ?`。若写成 `f"... WHERE username = '{username}'"`，
-  `' OR '1'='1` 即可绕过登录（`test_login_sql_injection_blocked` 用例验证了这一点被拦截）。
-- **Jinja2 自动转义**：`render_template_string` 默认开启转义，`{{ post['content'] }}` 会把
-  `<`、`>`、`'` 等输出成 HTML 实体，存储型 XSS 在渲染层被阻断。
-- **其它**：JWT 密钥从环境变量 `JWT_SECRET_KEY` 读取（默认值仅本地开发用，且 ≥32 字节）；
-  `app.run(debug=False)`（生产开启 debug 会暴露 Werkzeug 调试器）；统一错误信息防止枚举。
+  `' OR '1'='1` 即可绕过登录（`test_login_sql_injection_blocked` 验证了这一点被拦截）。
+- **XSS 防护**：文章内容原样入库，读取时 `markupsafe.escape()` 把 `<`、`>`、`&`、`'`、`"`
+  转成 HTML 实体，`<script>alert(1)</script>` 读回为 `&lt;script&gt;...`。
+- **其它**：用户不存在与密码错误统一返回 `invalid credentials` 防止枚举；JWT 密钥从环境
+  变量 `JWT_SECRET_KEY` 读取（默认值仅本地开发用）；`app.run(debug=False)`。
 
 ## 自动化测试
 
 ```bash
 pip install pytest
-pytest -v          # 9 个用例全通过
+pytest -v          # 8 个用例全通过
 ```
 
-覆盖：注册成功/重名、登录成功/密码错误、**SQLi 绕过被拦**、无 token 401、
-带 token 200、未登录发帖 401、**XSS 内容被转义**。
+覆盖：登录成功/密码错误、**SQLi 绕过被拦**、无 token 401、带 token 200 空列表、
+未登录发帖 401、缺字段 400、**XSS 内容被转义**。
 
 ## CI/CD
 
@@ -126,10 +113,8 @@ pytest -v          # 9 个用例全通过
 
 ## 📸 截图清单（写入实验报告）
 
-1. `python init_db.py` 输出 + `sqlite3` 查看 `password_hash` 为 bcrypt 哈希串。
-2. 注册 / 登录成功返回（登录含 JWT）。
-3. 无 token 访问 `/me` 返回 401、带 token 返回 200 的对比。
-4. 发布含 `<script>` 的文章后，`GET /posts` 源码里脚本被转义为 `&lt;script&gt;`。
-5. 使用 `' OR '1'='1` 尝试登录返回 401（SQLi 被拦）。
-6. `pytest -v` 全绿截图。
-7. GitHub Actions 流水线（test + security）通过截图。
+1. `python init_db.py` 输出 + `sqlite3 app.db 'SELECT username, password_hash FROM users;'`
+   可见 bcrypt 哈希串（`$2b$12$...`）。
+2. 截图节点 ①：无 token 401 → 登录拿 token → 带 token 200 → 发 XSS 帖 → 读回已转义。
+3. `pytest -v` 全绿截图。
+4. GitHub Actions 流水线（test + security）通过截图。

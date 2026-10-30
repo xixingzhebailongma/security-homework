@@ -27,71 +27,75 @@ def client():
     os.remove(db_path)
 
 
-def _register_and_login(client, username="alice", password="Alice#2026!"):
-    """返回 (access_token, headers)"""
-    client.post("/register", json={"username": username, "password": password})
-    resp = client.post("/login", json={"username": username, "password": password})
-    token = resp.get_json()["access_token"]
-    return token, {"Authorization": f"Bearer {token}"}
-
-
-def test_register_success(client):
-    resp = client.post("/register", json={"username": "bob", "password": "Bob#1234!"})
-    assert resp.status_code == 201
-
-
-def test_register_duplicate(client):
-    client.post("/register", json={"username": "alice", "password": "Alice#2026!"})
-    resp = client.post("/register", json={"username": "alice", "password": "Alice#2026!"})
-    assert resp.status_code == 409
+def _login(client, username="alice", password="Alice#2026!"):
+    resp = client.post("/auth/login", json={"username": username, "password": password})
+    return resp.get_json()["access_token"]
 
 
 def test_login_success_returns_jwt(client):
-    resp = client.post("/login", json={"username": "alice", "password": "Alice#2026!"})
+    resp = client.post(
+        "/auth/login", json={"username": "alice", "password": "Alice#2026!"}
+    )
     assert resp.status_code == 200
     assert "access_token" in resp.get_json()
 
 
 def test_login_wrong_password(client):
-    resp = client.post("/login", json={"username": "alice", "password": "wrong-password"})
+    resp = client.post("/auth/login", json={"username": "alice", "password": "wrong"})
     assert resp.status_code == 401
+    assert resp.get_json()["error"] == "invalid credentials"
 
 
 def test_login_sql_injection_blocked(client):
     # 若登录用字符串拼接 SQL，该 payload 会绕过认证；参数化查询下应返回 401
-    payload = {"username": "alice' OR '1'='1", "password": "whatever"}
-    resp = client.post("/login", json=payload)
+    resp = client.post(
+        "/auth/login", json={"username": "alice' OR '1'='1", "password": "x"}
+    )
     assert resp.status_code == 401
 
 
-def test_me_without_token(client):
-    resp = client.get("/me")
+def test_api_data_requires_token(client):
+    resp = client.get("/api/data")
     assert resp.status_code == 401
 
 
-def test_me_with_token(client):
-    _, headers = _register_and_login(client)
-    resp = client.get("/me", headers=headers)
+def test_api_data_empty_with_token(client):
+    token = _login(client)
+    resp = client.get("/api/data", headers={"Authorization": f"Bearer {token}"})
     assert resp.status_code == 200
-    assert resp.get_json()["username"] == "alice"
+    assert resp.get_json() == {"data": []}
 
 
 def test_create_post_requires_auth(client):
-    resp = client.post("/posts", json={"title": "t", "content": "c"})
+    resp = client.post("/api/posts", json={"title": "t", "content": "c"})
     assert resp.status_code == 401
 
 
-def test_stored_xss_is_escaped(client):
-    _, headers = _register_and_login(client)
+def test_create_post_missing_fields(client):
+    token = _login(client)
+    resp = client.post(
+        "/api/posts", json={"title": "", "content": ""},
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert resp.status_code == 400
 
-    # 攻击者试图注入一段脚本
-    xss = "<script>alert('xss')</script>"
+
+def test_stored_xss_is_escaped(client):
+    token = _login(client)
+
+    # 攻击者试图注入一段脚本作为标题
+    xss = "<script>alert(1)</script>"
     create = client.post(
-        "/posts", json={"title": "恶意文章", "content": xss}, headers=headers
+        "/api/posts",
+        json={"title": xss, "content": "xss test"},
+        headers={"Authorization": f"Bearer {token}"},
     )
     assert create.status_code == 201
 
-    # 渲染列表页时，脚本应被转义为纯文本，不应出现可执行的 <script> 标签
-    html = client.get("/posts").get_data(as_text=True)
-    assert "<script>alert('xss')</script>" not in html
-    assert "&lt;script&gt;" in html
+    # 读回时 title 应被转义，而不是原样返回可执行的 <script>
+    data = client.get(
+        "/api/data", headers={"Authorization": f"Bearer {token}"}
+    ).get_json()
+    title = data["data"][0]["title"]
+    assert title == "&lt;script&gt;alert(1)&lt;/script&gt;"
+    assert "<script>" not in title
