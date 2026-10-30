@@ -72,7 +72,7 @@ information in cached sessions), fixed by upgrading to `Flask==3.1.3`.
 ![pytest all green](screenshots/pytest.png)
 
 Last successful pipeline run:
-https://github.com/xixingzhebailongma/security-homework/actions/runs/41056009327
+https://github.com/xixingzhebailongma/security-homework/actions/runs/41076286245
 
 ## 5. Selected Vulnerability: CVE-2024-23334
 
@@ -157,7 +157,7 @@ curl -s -o /dev/null -w "%{http_code}\n" http://localhost:8080/static/hello.txt
 | --- | --- |
 | Public repo | https://github.com/xixingzhebailongma/security-homework |
 | README (this report) | `README.md` |
-| Successful pipeline | https://github.com/xixingzhebailongma/security-homework/actions/runs/41056009327 |
+| Successful pipeline | https://github.com/xixingzhebailongma/security-homework/actions/runs/41076286245 |
 | Fix files | `cve-2024-23334/fixes/` |
 
 Each subdirectory has its own README (`secure-api/`, `cve-2024-23334/`); control questions are in
